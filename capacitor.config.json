@@ -1,0 +1,17 @@
+{
+  "appId": "com.mariyamsyed.dailyprayer",
+  "appName": "Mariyam Quran",
+  "webDir": "dist",
+  "backgroundColor": "#0B2E2A",
+  "android": {
+    "allowMixedContent": false,
+    "adjustMarginsForEdgeToEdge": "auto"
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_prayer",
+      "iconColor": "#C9A24B",
+      "sound": "adhan.mp3"
+    }
+  }
+}
