@@ -1,0 +1,86 @@
+name: Build Android APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [zeenath, Zeenath]
+permissions:
+  contents: write
+concurrency:
+  group: build-apk-zeenath
+  cancel-in-progress: true
+jobs:
+  apk:
+    # Builds only on the zeenath branch, even if started by hand from another branch
+    if: github.ref_name == 'zeenath' || github.ref_name == 'Zeenath'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm install
+      - run: npm run build
+      - run: rm -rf android && npx cap add android
+      - run: node scripts/android-setup.cjs
+      - name: Make Android icons from assets/icon-only.png
+        run: |
+          npm install --no-save sharp
+          node <<'EOF'
+          const sharp = require('sharp'), fs = require('fs'), path = require('path')
+          const res = process.env.RES || 'android/app/src/main/res'
+          const src = 'assets/icon-only.png'
+          const D = { mdpi: [48, 108], hdpi: [72, 162], xhdpi: [96, 216], xxhdpi: [144, 324], xxxhdpi: [192, 432] }
+          const old = /^ic_launcher(_round|_foreground|_background|_fg|_bg)?\.(png|webp|xml)$/
+          ;(async () => {
+            fs.mkdirSync(res, { recursive: true })
+            for (const d of fs.readdirSync(res)) {
+              if (!d.startsWith('mipmap')) continue
+              for (const f of fs.readdirSync(path.join(res, d))) if (old.test(f)) fs.rmSync(path.join(res, d, f))
+            }
+            const sq = (n) => sharp(src).resize(n, n, { fit: 'cover' })
+            for (const [d, [l, a]] of Object.entries(D)) {
+              const dir = path.join(res, 'mipmap-' + d)
+              fs.mkdirSync(dir, { recursive: true })
+              await sq(l).png().toFile(dir + '/ic_launcher.png')
+              const mask = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${l}" height="${l}"><circle cx="${l / 2}" cy="${l / 2}" r="${l / 2}"/></svg>`)
+              await sq(l).composite([{ input: mask, blend: 'dest-in' }]).png().toFile(dir + '/ic_launcher_round.png')
+              await sq(a).png().toFile(dir + '/ic_launcher_fg.png')
+              await sharp({ create: { width: a, height: a, channels: 3, background: '#0B2E2A' } }).png().toFile(dir + '/ic_launcher_bg.png')
+            }
+            const xml = '<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@mipmap/ic_launcher_bg"/>\n    <foreground android:drawable="@mipmap/ic_launcher_fg"/>\n</adaptive-icon>\n'
+            const any = path.join(res, 'mipmap-anydpi-v26')
+            fs.mkdirSync(any, { recursive: true })
+            fs.writeFileSync(any + '/ic_launcher.xml', xml)
+            fs.writeFileSync(any + '/ic_launcher_round.xml', xml)
+            console.log('Icons generated from ' + src)
+          })()
+          EOF
+      - run: npx cap sync android
+      - name: Version number
+        run: |
+          sed -i "s/versionCode 1/versionCode ${{ github.run_number }}/; s/versionName \"1.0\"/versionName \"1.${{ github.run_number }}\"/" android/app/build.gradle
+      - name: Use the fixed signing key (so new builds install over old ones)
+        run: |
+          if [ -f signing/debug.keystore ]; then mkdir -p ~/.android && cp signing/debug.keystore ~/.android/debug.keystore; fi
+      - run: chmod +x android/gradlew && cd android && ./gradlew assembleDebug --no-daemon
+      - name: Name the APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk "Zeenath-Shameena-Quran-v${{ github.run_number }}.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Daily-Prayer-APK
+          path: Zeenath-Shameena-Quran-v${{ github.run_number }}.apk
+          if-no-files-found: error
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: zeenath-${{ github.run_number }}
+          name: Zeenath Shameena Quran v${{ github.run_number }}
+          make_latest: true
+          body: |
+            Install: download the .apk below on your phone, open it and allow "Install unknown apps" if asked.
+            On first launch, tap "Allow and continue" so prayer alerts and location work.
+          files: Zeenath-Shameena-Quran-v${{ github.run_number }}.apk
